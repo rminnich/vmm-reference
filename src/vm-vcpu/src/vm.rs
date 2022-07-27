@@ -24,8 +24,6 @@ use crate::vcpu::{self, KvmVcpu, VcpuConfigList, VcpuRunState, VcpuState};
 
 #[cfg(target_arch = "aarch64")]
 use vm_vcpu_ref::aarch64::interrupts::{self, Gic, GicConfig, GicState};
-#[cfg(target_arch = "x86_64")]
-use vm_vcpu_ref::x86_64::mptable::{self, MpTable};
 
 /// Defines the configuration of this VM.
 #[derive(Clone)]
@@ -114,10 +112,6 @@ pub enum Error {
     /// Failed to run the vcpus.
     #[error("Failed to run the vcpus: {0}")]
     RunVcpus(io::Error),
-    /// Failed to configure mptables.
-    #[error("Failed to configure mptables.")]
-    #[cfg(target_arch = "x86_64")]
-    Mptable(mptable::Error),
     /// Failed to pause the vcpus.
     #[error("Failed to pause the vcpus: {0}")]
     PauseVcpus(Errno),
@@ -148,13 +142,6 @@ pub enum Error {
     /// Failed to save the state of vCPUs.
     #[error("Failed to save the state of vCPUs: {0}")]
     SaveVcpuState(vcpu::Error),
-}
-
-#[cfg(target_arch = "x86_64")]
-impl From<mptable::Error> for Error {
-    fn from(err: mptable::Error) -> Self {
-        Error::Mptable(err)
-    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -227,9 +214,6 @@ impl<EH: 'static + ExitHandler + Send> KvmVm<EH> {
     ) -> Result<Self> {
         let vcpus_config = vm_config.vcpus_config.clone();
         let mut vm = Self::create_vm(kvm, vm_config, exit_handler, guest_memory)?;
-
-        #[cfg(target_arch = "x86_64")]
-        MpTable::new(vm.config.num_vcpus)?.write(guest_memory)?;
 
         #[cfg(target_arch = "x86_64")]
         vm.setup_irq_controller()?;
@@ -573,8 +557,6 @@ mod tests {
     use super::*;
 
     use crate::vm::{Error, KvmVm, VmConfig};
-    #[cfg(target_arch = "x86_64")]
-    use vm_vcpu_ref::x86_64::mptable::MAX_SUPPORTED_CPUS;
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::sleep;
@@ -629,16 +611,6 @@ mod tests {
     ) -> KvmVm<WrappedExitHandler> {
         let kvm = Kvm::new().unwrap();
         default_vm(&kvm, guest_memory, num_vcpus).unwrap()
-    }
-
-    #[test]
-    #[cfg(target_arch = "x86_64")]
-    fn test_failed_setup_mptable() {
-        let num_vcpus = (MAX_SUPPORTED_CPUS + 1) as u8;
-        let kvm = Kvm::new().unwrap();
-        let guest_memory = default_memory();
-        let res = default_vm(&kvm, &guest_memory, num_vcpus);
-        assert!(matches!(res, Err(Error::Mptable(_))));
     }
 
     #[test]

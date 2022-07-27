@@ -34,7 +34,7 @@ use vm_vcpu_ref::x86_64::{
     interrupts::{
         set_klapic_delivery_mode, DeliveryMode, APIC_LVT0_REG_OFFSET, APIC_LVT1_REG_OFFSET,
     },
-    mptable, msr_index, msrs,
+    msr_index, msrs,
 };
 use vmm_sys_util::errno::Error as Errno;
 use vmm_sys_util::signal::{register_signal_handler, SIGRTMIN};
@@ -101,10 +101,6 @@ pub enum Error {
     /// Error issuing an ioctl to KVM.
     #[error("Error issuing an ioctl to KVM: {0}")]
     KvmIoctl(kvm_ioctls::Error),
-    /// Failed to configure mptables.
-    #[error("Failed to configure mptables.")]
-    #[cfg(target_arch = "x86_64")]
-    Mptable(mptable::Error),
     /// Failed to setup the GDT.
     #[error("Failed to setup the GDT.")]
     #[cfg(target_arch = "x86_64")]
