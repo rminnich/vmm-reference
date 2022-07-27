@@ -9,7 +9,6 @@ use std::convert::TryInto;
 use std::fs::File;
 use std::io::{self, stdin, stdout};
 use std::ops::DerefMut;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -55,7 +54,6 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 #[cfg(target_arch = "x86_64")]
 use boot::build_bootparams;
 pub use config::*;
-use devices::virtio::block::{self, BlockArgs};
 use devices::virtio::net::{self, NetArgs};
 use devices::virtio::{Env, MmioConfig};
 
@@ -127,8 +125,6 @@ pub enum MemoryError {
 /// VMM errors.
 #[derive(Debug)]
 pub enum Error {
-    /// Failed to create block device.
-    Block(block::Error),
     /// Failed to write boot parameters to guest memory.
     #[cfg(target_arch = "x86_64")]
     BootConfigure(configurator::Error),
@@ -184,7 +180,6 @@ impl From<vm_allocator::Error> for crate::Error {
 /// Dedicated [`Result`](https://doc.rust-lang.org/std/result/) type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-type Block = block::Block<Arc<GuestMemoryMmap>>;
 type Net = net::Net<Arc<GuestMemoryMmap>>;
 
 /// A live VMM.
@@ -201,7 +196,6 @@ pub struct Vmm {
     // and isn't Copy-able; so once one of them gets ownership, the other one can't anymore.
     event_mgr: EventManager<Arc<Mutex<dyn MutEventSubscriber + Send>>>,
     exit_handler: WrappedExitHandler,
-    block_devices: Vec<Arc<Mutex<Block>>>,
     net_devices: Vec<Arc<Mutex<Net>>>,
     // TODO: fetch the vcpu number from the `vm` object.
     // TODO-continued: this is needed to make the arm POC work as we need to create the FDT
@@ -307,7 +301,6 @@ impl TryFrom<VMMConfig> for Vmm {
             event_mgr: event_manager,
             kernel_cfg: config.kernel_config,
             exit_handler: wrapped_exit_handler,
-            block_devices: Vec::new(),
             net_devices: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             num_vcpus: config.vcpu_config.num as u64,
@@ -321,10 +314,6 @@ impl TryFrom<VMMConfig> for Vmm {
         vmm.add_rtc_device()?;
 
         // Adding the virtio devices. We'll come up with a cleaner abstraction for `Env`.
-        if let Some(cfg) = config.block_config.as_ref() {
-            vmm.add_block_device(cfg)?;
-        }
-
         if let Some(cfg) = config.net_config.as_ref() {
             vmm.add_net_device(cfg)?;
         }
@@ -570,52 +559,6 @@ impl Vmm {
             .unwrap()
             .register_mmio(range, rtc)
             .unwrap();
-        Ok(())
-    }
-
-    // All methods that add a virtio device use hardcoded addresses and interrupts for now, and
-    // only support a single device. We need to expand this, but it looks like a good match if we
-    // can do it after figuring out how to better separate concerns and make the VMM agnostic of
-    // the actual device types.
-    fn add_block_device(&mut self, cfg: &BlockConfig) -> Result<()> {
-        let mem = Arc::new(self.guest_memory.clone());
-        let range = self.address_allocator.allocate(
-            0x1000,
-            DEFAULT_ADDRESSS_ALIGNEMNT,
-            DEFAULT_ALLOC_POLICY,
-        )?;
-
-        let mmio_range = mmio_from_range(&range);
-        let mmio_cfg = MmioConfig {
-            range: mmio_range,
-            gsi: 5,
-        };
-
-        let mut guard = self.device_mgr.lock().unwrap();
-
-        let mut env = Env {
-            mem,
-            vm_fd: self.vm.vm_fd(),
-            event_mgr: &mut self.event_mgr,
-            mmio_mgr: guard.deref_mut(),
-            mmio_cfg,
-            kernel_cmdline: &mut self.kernel_cfg.cmdline,
-        };
-
-        let args = BlockArgs {
-            file_path: PathBuf::from(&cfg.path),
-            read_only: false,
-            root_device: true,
-            advertise_flush: true,
-        };
-
-        // We can also hold this somewhere if we need to keep the handle for later.
-        let block = Block::new(&mut env, &args).map_err(Error::Block)?;
-        #[cfg(target_arch = "aarch64")]
-        self.fdt_builder
-            .add_virtio_device(range.start(), range.len(), 5);
-        self.block_devices.push(block);
-
         Ok(())
     }
 
